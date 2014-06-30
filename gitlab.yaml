@@ -3,6 +3,19 @@ heat_template_version: 2013-05-23
 description: |
   This is a Heat template to deploy a single Linux server running Gitlab
 
+parameter_groups:
+
+- label: Server Settings
+  parameters:
+  - server_hostname
+  - image
+  - flavor
+
+- label: Gitlab Settings
+  parameters:
+  - ssh_keypair_name
+  - gitlab_admin_user
+
 parameters:
 
   server_hostname:
@@ -63,16 +76,19 @@ parameters:
       description: "Must be shorter than 64 characters or fewer."
 
   kitchen:
+    label: Kitchen
     description: URL for the kitchen to use
     type: string
     default: https://github.com/rackspace-orchestration-templates/gitlab.git
 
   chef_version:
+    label: Chef Version
     description: Version of chef client to use
     type: string
     default: 11.12.2
 
   gitlab_admin_user:
+    label: Gitlab Admin Username
     description: User name for gitlab admin user
     type: string
     default: root
