@@ -148,6 +148,8 @@ resources:
       kitchen: { get_param: kitchen }
       chef_version: { get_param: chef_version }
       node:
+        build-essential:
+          compile_time: true
         gitlab:
           admin_password: { get_attr: [gitlab_admin_password, value] }
           admin_user: { get_param: gitlab_admin_user }
