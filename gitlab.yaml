@@ -7,14 +7,18 @@ parameter_groups:
 
 - label: Server Settings
   parameters:
-  - server_hostname
   - image
   - flavor
 
 - label: Gitlab Settings
   parameters:
-  - ssh_keypair_name
   - gitlab_admin_user
+
+- label: rax-dev-params
+  parameters:
+  - server_hostname
+  - kitchen
+  - chef_version
 
 parameters:
 
@@ -32,8 +36,10 @@ parameters:
         Must begin with a letter and contain only alphanumeric characters.
 
   image:
-    label: Server Image
-    description: Operating system to use for the Gitlab Server
+    label: Operating System
+    description: |
+      Server image used for all servers that are created as a part of this
+      deployment
     type: string
     default: Ubuntu 14.04 LTS (Trusty Tahr)
     constraints:
@@ -44,8 +50,10 @@ parameters:
       description: Must be a supported operating system.
 
   flavor:
-    label: Cloud Server flavor
-    description: Flavor of Cloud server to use
+    label: Server Size
+    description: |
+      Rackspace Cloud Server flavor to use. The size is based on the amount of
+      RAM for the provisioned server.
     type: string
     default: 4 GB Performance
     constraints:
@@ -65,15 +73,6 @@ parameters:
       description: |
         Must be a valid Rackspace Cloud Server flavor for the region you have
         selected to deploy into.
-
-  ssh_keypair_name:
-    label: SSH Keypair Name
-    description: New nova keypair name for ssh access to the server
-    type: string
-    default: gitlab-key
-    constraints:
-    - allowed_pattern: "^(.){1,64}$"
-      description: "Must be shorter than 64 characters or fewer."
 
   kitchen:
     label: Kitchen
@@ -98,7 +97,7 @@ resources:
   ssh_key:
     type: "OS::Nova::KeyPair"
     properties:
-      name: { get_param: ssh_keypair_name }
+      name: { get_param: "OS::stack_id" }
       save_private_key: true
 
   gitlab_admin_password:
@@ -139,23 +138,9 @@ resources:
       image: { get_param: image }
       key_name: { get_resource: ssh_key }
 
-  gitlab_presetup:
-    type: "OS::Heat::ChefSolo"
-    depends_on: gitlab_server
-    properties:
-      username: root
-      private_key: { get_attr: [ssh_key, private_key] }
-      host: { get_attr: [gitlab_server, accessIPv4] }
-      kitchen: { get_param: kitchen }
-      chef_version: { get_param: chef_version }
-      node:
-        run_list:
-          - recipe[apt]
-          - recipe[build-essential]
-
   gitlab_setup:
     type: "OS::Heat::ChefSolo"
-    depends_on: gitlab_presetup
+    depends_on: gitlab_server
     properties:
       username: root
       private_key: { get_attr: [ssh_key, private_key] }
@@ -180,6 +165,8 @@ resources:
             - address: 127.0.0.1
               port: 6379
         run_list:
+          - recipe[apt]
+          - recipe[build-essential]
           - recipe[mysql::server]
           - recipe[dotmy-cnf]
           - recipe[postfix::server]
@@ -190,13 +177,17 @@ resources:
 
 outputs:
   private_key:
+    description: SSH Private Key
     value: { get_attr: [ssh_key, private_key] }
 
   server_ip:
+    description: Server IP
     value: { get_attr: [gitlab_server, accessIPv4] }
 
   gitlab_admin_user:
+    description: GitLab User
     value: { get_param: gitlab_admin_user }
 
   gitlab_admin_password:
+    description: GitLab Password
     value: { get_attr: [gitlab_admin_password, value] }
