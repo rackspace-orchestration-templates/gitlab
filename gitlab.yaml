@@ -161,6 +161,7 @@ resources:
           https: true
           self_signed_cert: true
         mysql:
+          bind_address: 127.0.0.1
           server_debian_password: { get_attr: [mysql_debian_password, value] }
           server_repl_password: { get_attr: [mysql_repl_password, value] }
           server_root_password: { get_attr: [mysql_root_password, value] }
