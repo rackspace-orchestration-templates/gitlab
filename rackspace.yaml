@@ -84,3 +84,4 @@ instructions: |
   '/root/.my.cnf' to your system to make management of MySQL easier. This
   contains your root password as well in case you forget or lose your MySQL
   root password.
+user-input-required: true
