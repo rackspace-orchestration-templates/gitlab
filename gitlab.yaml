@@ -10,15 +10,9 @@ parameter_groups:
   - image
   - flavor
 
-- label: Gitlab Settings
-  parameters:
-  - gitlab_admin_user
-
 - label: rax-dev-params
   parameters:
   - server_hostname
-  - kitchen
-  - chef_version
 
 parameters:
 
@@ -41,11 +35,9 @@ parameters:
       Server image used for all servers that are created as a part of this
       deployment
     type: string
-    default: Ubuntu 14.04 LTS (Trusty Tahr) (PV)
+    default: Ubuntu 14.04 LTS (Trusty Tahr) (PVHVM)
     constraints:
     - allowed_values:
-      - Ubuntu 12.04 LTS (Precise Pangolin) (PVHVM)
-      - Ubuntu 14.04 LTS (Trusty Tahr) (PV)
       - Ubuntu 14.04 LTS (Trusty Tahr) (PVHVM)
       description: Must be a supported operating system.
 
@@ -74,24 +66,6 @@ parameters:
         Must be a valid Rackspace Cloud Server flavor for the region you have
         selected to deploy into.
 
-  kitchen:
-    label: Kitchen
-    description: URL for the kitchen to use
-    type: string
-    default: https://github.com/rackspace-orchestration-templates/gitlab.git
-
-  chef_version:
-    label: Chef Version
-    description: Version of chef client to use
-    type: string
-    default: 11.12.8
-
-  gitlab_admin_user:
-    label: Gitlab Admin Username
-    description: User name for gitlab admin user
-    type: string
-    default: root
-
 resources:
 
   ssh_key:
@@ -106,32 +80,17 @@ resources:
       length: 32
       sequence: lettersdigits
 
-  gitlab_db_password:
-    type: OS::Heat::RandomString
+  wait_condition:
+    type: OS::Heat::SwiftSignal
     properties:
-      length: 32
-      sequence: lettersdigits
+      handle: { get_resource: wait_condition_handle }
+      timeout: 600
 
-  mysql_debian_password:
-    type: OS::Heat::RandomString
-    properties:
-      length: 32
-      sequence: lettersdigits
-
-  mysql_repl_password:
-    type: OS::Heat::RandomString
-    properties:
-      length: 32
-      sequence: lettersdigits
-
-  mysql_root_password:
-    type: OS::Heat::RandomString
-    properties:
-      length: 32
-      sequence: lettersdigits
+  wait_condition_handle:
+    type: OS::Heat::SwiftSignalHandle
 
   gitlab_server:
-    type: "Rackspace::Cloud::Server"
+    type: "OS::Nova::Server"
     properties:
       name: { get_param: server_hostname }
       flavor: { get_param: flavor }
@@ -139,46 +98,77 @@ resources:
       key_name: { get_resource: ssh_key }
       metadata:
         rax-heat: { get_param: "OS::stack_id" }
+      config_drive: "true"
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            package_update: true
+            packages:
+              - build-essential
+              - curl
+              - openssh-server
+              - postfix
+              - python-pip
+            write_files:
+              - path: /root/gitlab.rb
+                permissions: '0600'
+                content: |
+                  external_url "https://%server_hostname%"
+                  gitlab_rails['initial_root_password'] = "%gitlab_admin_password%"
+                  nginx['custom_nginx_config'] = "include /var/opt/gitlab/nginx/conf/gitlab-http-redirect.conf;"
+              - path: /root/gitlab-http-redirect.conf
+                permissions: '0655'
+                content: |
+                  server {
+                    listen 80;
+                    return 301 https://$host$request_uri;
+                  }
+              - path: /root/setup/install_gitlab.sh
+                permissions: '0500'
+                content: |
+                  #!/bin/bash -ex
 
-  gitlab_setup:
-    type: "OS::Heat::ChefSolo"
-    depends_on: gitlab_server
-    properties:
-      username: root
-      private_key: { get_attr: [ssh_key, private_key] }
-      host: { get_attr: [gitlab_server, accessIPv4] }
-      kitchen: { get_param: kitchen }
-      chef_version: { get_param: chef_version }
-      node:
-        build-essential:
-          compile_time: true
-        gitlab:
-          admin_password: { get_attr: [gitlab_admin_password, value] }
-          admin_user: { get_param: gitlab_admin_user }
-          database:
-            password: { get_attr: [gitlab_db_password, value] }
-          generate_self_signed_cert: true
-          https: true
-          self_signed_cert: true
-        mysql:
-          bind_address: 127.0.0.1
-          server_debian_password: { get_attr: [mysql_debian_password, value] }
-          server_repl_password: { get_attr: [mysql_repl_password, value] }
-          server_root_password: { get_attr: [mysql_root_password, value] }
-        redisio:
-          servers:
-            - address: 127.0.0.1
-              port: 6379
-        run_list:
-          - recipe[apt]
-          - recipe[build-essential]
-          - recipe[mysql::server]
-          - recipe[dotmy-cnf]
-          - recipe[postfix::server]
-          - recipe[rax-gitlab::default]
-          - recipe[rax-gitlab::firewall]
-          - recipe[gitlab-http-redirect]
+                  error() {
+                    echo "ERROR: exiting at line $1"
+                    python -c 'import json,requests;requests.put("%wc_notify%",data=json.dumps({"status":"FAILURE","data":open("/var/log/cloud-init-output.log").read()}))'
+                    exit "${3:-1}"
+                  }
 
+                  trap 'error ${LINENO}' ERR
+
+                  pip install requests
+
+                  mkdir /root/working
+                  cd /root/working
+
+                  wget --progress=dot:giga 'https://downloads-packages.s3.amazonaws.com/ubuntu-14.04/gitlab_%version%-omnibus-1_amd64.deb'
+                  dpkg -i gitlab_%version%-omnibus-1_amd64.deb
+                  mv /etc/gitlab/gitlab.rb /etc/gitlab/gitlab.rb.original
+                  mv /root/gitlab.rb /etc/gitlab/gitlab.rb
+                  mkdir --mode=0750 /etc/gitlab/ssl
+                  openssl req \
+                  -subj '/CN=%server_hostname%/O=My Company Name LTD./C=US' \
+                  -new -newkey rsa:2048 -days 3650 -sha256 -nodes -x509   \
+                  -keyout /etc/gitlab/ssl/%server_hostname%.key           \
+                  -out /etc/gitlab/ssl/%server_hostname%.crt
+                  mkdir -p /var/opt/gitlab/nginx/conf
+                  mv /root/gitlab-http-redirect.conf /var/opt/gitlab/nginx/conf
+                  /usr/bin/gitlab-ctl reconfigure
+                  ufw allow 22
+                  ufw allow 80
+                  ufw allow 443
+                  ufw --force enable
+
+                  python -c 'import json,requests;requests.put("%wc_notify%",data=json.dumps({"status":"SUCCESS","data":open("/var/log/cloud-init-output.log").read()}))'
+            runcmd:
+              - /root/setup/install_gitlab.sh
+          params:
+              '%gitlab_admin_password%': { get_attr: [gitlab_admin_password, value] }
+              '%server_hostname%': { get_param: server_hostname }
+              '%wc_notify%': { get_attr: ['wait_condition_handle', 'endpoint'] }
+              '%version%': 7.8.1
 
 outputs:
   private_key:
@@ -189,10 +179,10 @@ outputs:
     description: Server IP
     value: { get_attr: [gitlab_server, accessIPv4] }
 
-  gitlab_admin_user:
-    description: GitLab User
-    value: { get_param: gitlab_admin_user }
-
   gitlab_admin_password:
     description: GitLab Password
     value: { get_attr: [gitlab_admin_password, value] }
+
+  server_data:
+    value: { get_attr: [ wait_condition, data ] }
+    description: Data from wait condition to report script status
