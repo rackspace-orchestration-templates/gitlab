@@ -42,3 +42,6 @@ instructions: |
   * [How to start and stop gitlab components](https://gitlab.com/gitlab-org/omnibus-gitlab/blob/master/README.md#starting-and-stopping)
 
 user-input-required: false
+description: |
+  Single Linux server running [GitLab 7.8.1](http://gitlab.org/) with a
+  [MySQL](http://www.mysql.com/) back end.
