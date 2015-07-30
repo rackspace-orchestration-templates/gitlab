@@ -11,8 +11,8 @@ hidden_outputs:
   - private_key
   - gitlab_admin_password
 abstract: |
-  Single Linux server running [GitLab](http://gitlab.org/) with a
-  [MySQL](http://www.mysql.com/) back end.
+  Gitlab is an open-source solution for hosting source code repositories that
+  use the Git version control system.
 instructions: |
   #### Getting Started
   [GitLab](http://gitlab.org/gitlab-ce/) is an open source, web based
