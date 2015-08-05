@@ -1,7 +1,8 @@
 heat_template_version: 2013-05-23
 
 description: |
-  This is a Heat template to deploy a single Linux server running Gitlab
+  Single Linux server running [GitLab 7.8.1](http://gitlab.org/) with a
+  [MySQL](http://www.mysql.com/) back end.
 
 parameter_groups:
 
