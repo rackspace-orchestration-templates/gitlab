@@ -1,189 +1,212 @@
-heat_template_version: 2013-05-23
+heat_template_version: 2015-10-15
 
 description: |
   Single Linux server running [GitLab 7.8.1](http://gitlab.org/) with a
-  [MySQL](http://www.mysql.com/) back end.
+  [PostgreSQL](http://www.postgresql.org/) back end.
 
 parameter_groups:
-
-- label: Server Settings
+- label: GitLab Settings
   parameters:
-  - image
-  - flavor
-
+  - gitlab_url
+  - gitlab_email
 - label: rax-dev-params
   parameters:
-  - server_hostname
-
+  - server_image
+  - ansible_branch
+  - ansible_repo
 parameters:
-
-  server_hostname:
-    label: Server Name
-    description: Hostname to use for setting the server name.
+  #GitLab Customization
+  gitlab_url:
     type: string
-    default: gitlab
+    default: example.com
+    label: GitLab URL
+    description: Domain to use with GitLab
     constraints:
-    - length:
-        min: 1
-        max: 64
-    - allowed_pattern: "^[a-zA-Z][a-zA-Z0-9-]*$"
-      description: |
-        Must begin with a letter and contain only alphanumeric characters.
-
-  image:
-    label: Operating System
-    description: |
-      Server image used for all servers that are created as a part of this
-      deployment
+    - allowed_pattern: "^[a-zA-Z0-9.-]{1,255}.[a-zA-Z]{2,15}$"
+      description: Must be a valid domain name
+  gitlab_email:
     type: string
-    default: Ubuntu 14.04 LTS (Trusty Tahr) (PVHVM)
-    constraints:
-    - allowed_values:
-      - Ubuntu 14.04 LTS (Trusty Tahr) (PVHVM)
-      description: Must be a supported operating system.
-
-  flavor:
-    label: Server Size
-    description: |
-      Rackspace Cloud Server flavor to use. The size is based on the amount of
-      RAM for the provisioned server.
+    default: admin@example.com
+    label: GitLab Admin E-mail
+    description: E-mail Address for GitLab Admin User
+  #Advanced Options
+  server_flavor:
     type: string
     default: 4 GB General Purpose v1
+    label: Server Flavor
+    description: Flavor of Cloud Server to use
     constraints:
     - allowed_values:
       - 1 GB General Purpose v1
       - 2 GB General Purpose v1
       - 4 GB General Purpose v1
       - 8 GB General Purpose v1
-      - 15 GB I/O v1
-      - 30 GB I/O v1
-      - 1GB Standard Instance
-      - 2GB Standard Instance
-      - 4GB Standard Instance
-      - 8GB Standard Instance
-      - 15GB Standard Instance
-      - 30GB Standard Instance
-      description: |
-        Must be a valid Rackspace Cloud Server flavor for the region you have
-        selected to deploy into.
+  server_image:
+   type: string
+   default: f4bbbce2-50b0-4b07-bf09-96c175a45f4b
+   constraints:
+   - allowed_values:
+     - f4bbbce2-50b0-4b07-bf09-96c175a45f4b
+  ansible_branch:
+    type: string
+    default: stable
+    label: Git Branch or Tag for Ansible Roles
+    description: The Ansible Roles will be pulled from Git, using the tag or branch provided
+  ansible_repo:
+    type: string
+    default: https://github.com/rackspace-orchestration-templates/ansible-roles.git
+    label: Git Repo for Ansible Roles
+    description: The Ansible Roles will be pulled from Git, using the repo provided
 
 resources:
-
+  #SSH Key
   ssh_key:
-    type: "OS::Nova::KeyPair"
+    type: OS::Nova::KeyPair
     properties:
       name: { get_param: "OS::stack_id" }
       save_private_key: true
-
   gitlab_admin_password:
     type: OS::Heat::RandomString
+  #Software Configurations
+  upload_role_config:
+    type: OS::Heat::SoftwareConfig
     properties:
-      length: 32
-      sequence: lettersdigits
-
-  wait_condition:
-    type: OS::Heat::SwiftSignal
+      group: script
+      outputs:
+      - name: results
+      config:
+        str_replace:
+          template: |
+            #!/bin/bash
+            set -e
+            git clone -b 'tag' --single-branch --progress repository /etc/ansible/roles > $heat_outputs_path.results 2>&1
+          params:
+            tag: { get_param: ansible_branch}
+            repository: { get_param: ansible_repo }
+  gitlab_config:
+    type: OS::Heat::SoftwareConfig
     properties:
-      handle: { get_resource: wait_condition_handle }
-      timeout: 600
-
-  wait_condition_handle:
-    type: OS::Heat::SwiftSignalHandle
-
+      group: ansible
+      config: |
+        ---
+        - name: Install and configure GitLab
+          hosts: localhost
+          connection: local
+          roles:
+          - common
+          - gitlab
+          - firewall
+  deploy_roles:
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      signal_transport: TEMP_URL_SIGNAL
+      config:
+        get_resource: upload_role_config
+      server:
+        get_resource: gitlab_server
+  deploy_gitlab:
+    type: OS::Heat::SoftwareDeployment
+    depends_on: deploy_roles
+    properties:
+      signal_transport: TEMP_URL_SIGNAL
+      input_values:
+        tz: "America/Chicago"
+        gitlab_url: { get_param: gitlab_url }
+        gitlab_admin_password: { get_attr: [ gitlab_admin_password, value ] }
+        firewall_global_rules: [ "0.0.0.0,0,22,tcp", "0.0.0.0,0,80,tcp", "0.0.0.0,0,443,tcp"]
+        firewall_nodes: []
+        firewall_node_rules: []
+      config:
+        get_resource: gitlab_config
+      server:
+        get_resource: gitlab_server
   gitlab_server:
     type: "OS::Nova::Server"
     properties:
-      name: { get_param: server_hostname }
-      flavor: { get_param: flavor }
-      image: { get_param: image }
+      name: { get_param: "OS::stack_name" }
+      flavor: { get_param: server_flavor }
+      image: { get_param: server_image }
       key_name: { get_resource: ssh_key }
+      software_config_transport: POLL_TEMP_URL
+      config_drive: true
+      user_data_format: SOFTWARE_CONFIG
       metadata:
         rax-heat: { get_param: "OS::stack_id" }
-      config_drive: "true"
-      user_data_format: RAW
-      user_data:
+        build_config: "backup_agent_only,monitoring_defaults"
+  #Monitoring Checks
+  gitlab_server_http_check:
+    type: Rackspace::CloudMonitoring::Check
+    depends_on: deploy_gitlab
+    properties:
+      entity: { get_resource: gitlab_server }
+      type: remote.http
+      label:
         str_replace:
-          template: |
-            #cloud-config
-            package_update: true
-            packages:
-              - build-essential
-              - curl
-              - openssh-server
-              - postfix
-              - python-pip
-            write_files:
-              - path: /root/gitlab.rb
-                permissions: '0600'
-                content: |
-                  external_url "https://%server_hostname%"
-                  gitlab_rails['initial_root_password'] = "%gitlab_admin_password%"
-                  nginx['custom_nginx_config'] = "include /var/opt/gitlab/nginx/conf/gitlab-http-redirect.conf;"
-              - path: /root/gitlab-http-redirect.conf
-                permissions: '0655'
-                content: |
-                  server {
-                    listen 80;
-                    return 301 https://$host$request_uri;
-                  }
-              - path: /root/setup/install_gitlab.sh
-                permissions: '0500'
-                content: |
-                  #!/bin/bash -ex
-
-                  error() {
-                    echo "ERROR: exiting at line $1"
-                    python -c 'import json,requests;requests.put("%wc_notify%",data=json.dumps({"status":"FAILURE","data":open("/var/log/cloud-init-output.log").read()}))'
-                    exit "${3:-1}"
-                  }
-
-                  trap 'error ${LINENO}' ERR
-
-                  pip install requests
-
-                  mkdir /root/working
-                  cd /root/working
-
-                  wget --progress=dot:giga 'https://downloads-packages.s3.amazonaws.com/ubuntu-14.04/gitlab_%version%-omnibus-1_amd64.deb'
-                  dpkg -i gitlab_%version%-omnibus-1_amd64.deb
-                  mv /etc/gitlab/gitlab.rb /etc/gitlab/gitlab.rb.original
-                  mv /root/gitlab.rb /etc/gitlab/gitlab.rb
-                  mkdir --mode=0750 /etc/gitlab/ssl
-                  openssl req \
-                  -subj '/CN=%server_hostname%/O=My Company Name LTD./C=US' \
-                  -new -newkey rsa:2048 -days 3650 -sha256 -nodes -x509   \
-                  -keyout /etc/gitlab/ssl/%server_hostname%.key           \
-                  -out /etc/gitlab/ssl/%server_hostname%.crt
-                  mkdir -p /var/opt/gitlab/nginx/conf
-                  mv /root/gitlab-http-redirect.conf /var/opt/gitlab/nginx/conf
-                  /usr/bin/gitlab-ctl reconfigure
-                  ufw allow 22
-                  ufw allow 80
-                  ufw allow 443
-                  ufw --force enable
-
-                  python -c 'import json,requests;requests.put("%wc_notify%",data=json.dumps({"status":"SUCCESS","data":open("/var/log/cloud-init-output.log").read()}))'
-            runcmd:
-              - /root/setup/install_gitlab.sh
+          template: stack HTTP Check
           params:
-              '%gitlab_admin_password%': { get_attr: [gitlab_admin_password, value] }
-              '%server_hostname%': { get_param: server_hostname }
-              '%wc_notify%': { get_attr: ['wait_condition_handle', 'endpoint'] }
-              '%version%': 7.8.1
-
+            stack: { get_param: "OS::stack_name" }
+      details:
+        url:
+          str_replace:
+            template: "http://ipaddr"
+            params:
+              ipaddr: { get_attr: [gitlab_server, accessIPv4] }
+      metadata:
+        rax-heat: { get_param: "OS::stack_id" }
+        stack-name: { get_param: "OS::stack_name" }
+      period: 120
+      timeout: 10
+      monitoring_zones_poll:
+      - Northern Virginia (IAD)
+      - Chicago (ORD)
+      - Dallas Fort Worth (DFW)
+      - London (LON)
+      target_hostname: { get_attr: [gitlab_server, accessIPv4] }
+      target_receiver: IPv4
+  #Cloud Backup
+  gitlab_backup:
+    type: Rackspace::Cloud::BackupConfig
+    depends_on: gitlab_server
+    properties:
+      host_ip_address: { get_attr: [gitlab_server, accessIPv4] }
+      BackupConfigurationName:
+        str_replace:
+          template: stack Weekly Backup
+          params:
+            stack: { get_param: "OS::stack_name" }
+      Inclusions:
+      - FilePath: "/var/spool/holland"
+        FileItemType: "Folder"
+      - FilePath: "/var/www/"
+        FileItemType: "Folder"
+      NotifyFailure: true
+      NotifyRecipients: { get_param: gitlab_email }
+      TimeZoneId: Central Standard Time
+      StartTimeAmPm: AM
+      StartTimeHour: 1
+      StartTimeMinute: 0
+      HourInterval: null
+      DayOfWeekId: 0
+      Frequency: "Weekly"
+      VersionRetention: 30
 outputs:
-  private_key:
+  ssh_private_key:
     description: SSH Private Key
-    value: { get_attr: [ssh_key, private_key] }
-
+    value:
+      get_attr: [ssh_key, private_key]
+  gitlab_login_user:
+    description: GitLab Admin User
+    value: 'root'
+  gitlab_login_password:
+    description: GitLab Admin Password
+    value: { get_attr: [ gitlab_admin_password, value ] }
+  gitlab_url:
+    description: GitLab URL
+    value:
+      str_replace:
+        template: "https://url/"
+        params:
+          url: { get_param: gitlab_url }
   server_ip:
     description: Server IP
-    value: { get_attr: [gitlab_server, accessIPv4] }
-
-  gitlab_admin_password:
-    description: GitLab Password
-    value: { get_attr: [gitlab_admin_password, value] }
-
-  server_data:
-    value: { get_attr: [ wait_condition, data ] }
-    description: Data from wait condition to report script status
+    value: { get_attr: [ gitlab_server, accessIPv4 ] }

@@ -27,8 +27,6 @@ def check():
     assert process.is_up("nginx"), "nginx is not running"
     assert process.is_up("postgres"), "postgres is not running"
     assert process.is_up("redis-server"), "redis-server is not running"
-    assert service.is_enabled("nginx"), "service nginx is not enabled"
-    assert service.is_enabled("gitlab"), "service gitlab is not enabled"
     assert gitlab_is_responding(), "gitlab did not respond as expected"
 
 
