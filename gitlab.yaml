@@ -167,7 +167,7 @@ resources:
       host_ip_address: { get_attr: [gitlab_server, accessIPv4] }
       BackupConfigurationName:
         str_replace:
-          template: stack Weekly Backup
+          template: stack Daily Backup
           params:
             stack: { get_param: "OS::stack_name" }
       Inclusions:
