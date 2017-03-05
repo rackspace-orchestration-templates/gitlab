@@ -167,13 +167,11 @@ resources:
       host_ip_address: { get_attr: [gitlab_server, accessIPv4] }
       BackupConfigurationName:
         str_replace:
-          template: stack Weekly Backup
+          template: stack Daily Backup
           params:
             stack: { get_param: "OS::stack_name" }
       Inclusions:
-      - FilePath: "/var/spool/holland"
-        FileItemType: "Folder"
-      - FilePath: "/var/www/"
+      - FilePath: "/var/opt/gitlab/backups/"
         FileItemType: "Folder"
       NotifyFailure: true
       NotifyRecipients: { get_param: gitlab_email }
@@ -182,8 +180,8 @@ resources:
       StartTimeHour: 1
       StartTimeMinute: 0
       HourInterval: null
-      DayOfWeekId: 0
-      Frequency: "Weekly"
+      DayOfWeekId: null
+      Frequency: "Daily"
       VersionRetention: 30
 outputs:
   ssh_private_key:
